@@ -79,10 +79,18 @@ def call_llm(text):
 Extract structured data from this CV for an academic AI salary analyzer.
 
 RULES:
-- Calculate TOTAL years of experience
+- Calculate TOTAL professional experience precisely in months
+- Count professional experience after graduation whenever graduation date is available
 - Use job history dates
+- Internships count as professional experience only if they are professional internships in a company, lab, or organization
+- Do not count academic projects, coursework, thesis work, student research, or classroom research as professional experience
+- Do not count university research unless it is clearly listed as paid employment, research assistant work, or a formal professional contract
+- If a role overlaps with education, count it only if it is clearly an internship, employment, apprenticeship, freelance work, or professional contract
+- 2 months of internship must be returned as 2 months, not rounded to 1 year
+- min_experience_years must be min_experience_months / 12 rounded to 2 decimals
 - If current role is ongoing, assume present = 2026
-- Infer best matching job_title
+- job_title must be one of: AI Researcher, Applied Scientist, Data Analyst, Data Scientist, MLOps Engineer, Machine Learning Engineer
+- Choose the closest job_title from that list only
 - Infer country and professional region if possible
 - Keep arrays short and useful
 - If a value is unknown, use "Unknown" or []
@@ -93,6 +101,11 @@ RULES:
 - If the CV contains a university location, extract the real city/region instead
 - Infer whether education is completed or ongoing using dates
 - Do not label completed degrees as "en cours"
+- List ALL degrees found in the CV inside the education array, even if there are multiple
+- Order education entries from highest/most recent to oldest
+- education_level must represent only the highest completed degree as a single display string
+- education_level examples: "PhD en IA - MIT", "Master en Data Science - ENSIAS"
+- Do not return only "Licence", "Master", or "Bachelor" if the institution is visible in the CV
 - Do not use markdown
 - Do not wrap JSON in triple backticks
 - Ensure ALL fields are always present
@@ -109,10 +122,20 @@ FORMAT:
   "job_title": "string",
   "seniority_level": "Junior | Mid-level | Senior | Lead",
   "min_experience_years": number,
+  "min_experience_months": number,
   "country": "string",
   "city": "string",
   "skills": ["string"],
-  "education_level": "string",
+  "education": [
+  {{
+    "degree": "string",
+    "institution": "string",
+    "level": "Licence | Master | Doctorat | Bachelor | Other",
+    "status": "Terminée | En cours | Unknown",
+    "year": "string or null"
+  }}
+],
+"education_level": "string (highest degree only, for summary display)"
   "certifications": ["string"],
   "languages": ["string"],
   "strengths": ["string"],
@@ -166,22 +189,20 @@ CV:
 
 
 def normalize_job_title(title):
-
     title = title.lower()
 
-    if "data scientist" in title:
+    if "mlops" in title:
+        return "MLOps Engineer"
+    elif "applied scientist" in title or "applied science" in title:
+        return "Applied Scientist"
+    elif "ai researcher" in title or "ai research" in title:
+        return "AI Researcher"
+    elif "machine learning" in title or "ml engineer" in title:
+        return "Machine Learning Engineer"
+    elif "data scientist" in title:
         return "Data Scientist"
-
     elif "data analyst" in title:
         return "Data Analyst"
-
-    elif (
-        "ml" in title
-        or
-        "machine learning" in title
-    ):
-        return "ML Engineer"
-
     else:
         return "Data Scientist"
 
@@ -224,22 +245,18 @@ def infer_industry(title):
 
 def enrich_data(data):
 
-    years = data.get(
-        "min_experience_years",
-        2
-    )
+    months = data.get("min_experience_months")
 
-    if not isinstance(
-        years,
-        (int, float)
-    ):
+    if not isinstance(months, (int, float)):
+        years_value = data.get("min_experience_years", 2)
 
-        years = 2
+        if not isinstance(years_value, (int, float)):
+            years_value = 2
 
-    years = max(
-        0,
-        min(years, 20)
-    )
+        months = round(years_value * 12)
+
+    months = int(max(0, min(round(months), 240)))
+    years = round(months / 12, 2)
 
     title = normalize_job_title(
 
@@ -276,6 +293,9 @@ def enrich_data(data):
 
         "min_experience_years":
         years,
+
+        "min_experience_months":
+        months,
 
         "employment_type":
         "Full-time",
@@ -321,6 +341,20 @@ def build_profile_details(raw_data, prediction_data):
         else:
             seniority = "Junior"
 
+    education_list = raw_data.get("education", [])
+
+    if education_list:
+        highest = education_list[0]  # LLM should order highest first
+        education_level = raw_data.get(
+            "education_level", f"{highest.get('degree', 'Unknown')} - {highest.get('institution', 'Unknown')}")
+    else:
+        education_level = raw_data.get("education_level", "Unknown")
+
+    education_degree = education_list[0].get(
+        "degree", "Unknown") if education_list else "Unknown"
+    education_institution = education_list[0].get(
+        "institution", "Unknown") if education_list else "Unknown"
+
     return {
 
         "full_name":
@@ -338,14 +372,30 @@ def build_profile_details(raw_data, prediction_data):
             prediction_data.get("city", "Unknown")
         ),
 
+        "min_experience_months":
+        prediction_data.get(
+            "min_experience_months",
+            0
+        ),
+
         "skills":
         list_value(raw_data, "skills"),
 
         "education_level":
+        education_level,
+
+        "education_degree":
+        education_degree,
+
+        "education_institution":
+        education_institution,
+
+        "education_status":
         raw_data.get(
-            "education_level",
+            "education_status",
             "Unknown"
         ),
+        "education": education_list,
 
         "certifications":
         list_value(raw_data, "certifications"),
@@ -378,6 +428,29 @@ def build_profile_details(raw_data, prediction_data):
             "The salary estimate is based on the extracted role, experience level, country, company context, and market features used by the trained model."
         )
     }
+
+
+def format_experience(months):
+
+    months = int(max(0, round(months or 0)))
+
+    years = months // 12
+
+    remaining_months = months % 12
+
+    parts = []
+
+    if years:
+        parts.append(
+            f"{years} an" if years == 1 else f"{years} ans"
+        )
+
+    if remaining_months:
+        parts.append(
+            f"{remaining_months} mois"
+        )
+
+    return " et ".join(parts) if parts else "0 mois"
 
 # =========================
 # INTELLIGENCE FUNCTIONS
@@ -420,12 +493,17 @@ def get_feature_contributions(df_input):
 def format_contributions(
     contributions,
     years,
-    country
+    country,
+    months=None
 ):
+
+    experience_label = format_experience(
+        months if months is not None else years * 12
+    )
 
     explanations = [
 
-        f"{years} années d’expérience augmentent fortement le potentiel salarial dans les métiers IA et data.",
+        f"{experience_label} d’expérience sont pris en compte dans l’estimation salariale du profil.",
 
         f"Le marché {country} présente actuellement des rémunérations élevées pour les profils spécialisés en intelligence artificielle.",
 
@@ -437,75 +515,56 @@ def format_contributions(
 
 
 def profile_score(predicted_salary):
-
-    if predicted_salary < 50000:
-        return 42
-
-    elif predicted_salary < 70000:
-        return 58
-
-    elif predicted_salary < 90000:
-        return 69
-
-    elif predicted_salary < 120000:
-        return 78
-
-    elif predicted_salary < 160000:
-        return 87
-
+    if predicted_salary < 70673:
+        return 30
+    elif predicted_salary < 107565:
+        return 55
+    elif predicted_salary < 154331:
+        return 72
+    elif predicted_salary < 160015:
+        return 85
+    elif predicted_salary < 162202:
+        return 92
     else:
-        return 95
+        return 97
 
 
 def profile_percentile(predicted_salary):
-
-    if predicted_salary < 50000:
-        return "Top 65%"
-
-    elif predicted_salary < 70000:
-        return "Top 45%"
-
-    elif predicted_salary < 90000:
-        return "Top 30%"
-
-    elif predicted_salary < 120000:
-        return "Top 18%"
-
-    elif predicted_salary < 160000:
-        return "Top 12%"
-
-    else:
+    if predicted_salary < 70673:
+        return "Top 75%"
+    elif predicted_salary < 107565:
+        return "Top 50%"
+    elif predicted_salary < 154331:
+        return "Top 25%"
+    elif predicted_salary < 160015:
+        return "Top 10%"
+    elif predicted_salary < 162202:
         return "Top 5%"
-
-
-def score_label(score):
-
-    if score < 50:
-        return "Profil Débutant"
-
-    elif score < 70:
-        return "Profil Compétitif"
-
-    elif score < 85:
-        return "Profil Avancé"
-
     else:
-        return "Profil Premium"
+        return "Top 1%"
 
 
 def market_position(salary):
-
-    if salary < 70000:
+    if salary < 70673:
         return "Sous le marché"
-
-    elif salary < 120000:
+    elif salary < 107565:
         return "Moyenne du marché"
-
-    elif salary < 180000:
+    elif salary < 154331:
         return "Au-dessus du marché"
-
     else:
         return "Élite du marché"
+
+
+def score_label(score):
+    if score < 40:
+        return "Profil Débutant"
+    elif score < 60:
+        return "Profil Compétitif"
+    elif score < 80:
+        return "Profil Avancé"
+    else:
+        return "Profil Premium"
+
 
 # =========================
 # PREDICT
@@ -571,12 +630,18 @@ async def analyze_cv(
 
     years = data["min_experience_years"]
 
+    months = data.get(
+        "min_experience_months",
+        round(years * 12)
+    )
+
     country = data["country"]
 
     explanation = format_contributions(
         contributions,
         years,
-        country
+        country,
+        months
     )
 
     score = profile_score(salary)
@@ -638,12 +703,18 @@ def simulate(data: dict):
         0
     )
 
+    if not isinstance(current_exp, (int, float)):
+        current_exp = 0
+
+    current_exp = round(max(0, min(float(current_exp), 20)), 2)
+
+    chart_start_exp = int(round(current_exp))
+
     trajectory = []
 
-    for exp in range(
-        current_exp,
-        current_exp + 10
-    ):
+    for step in range(10):
+
+        exp = chart_start_exp + step
 
         sim_data = data.copy()
 
@@ -686,6 +757,39 @@ def simulate(data: dict):
         "trajectory":
         trajectory
     }
+
+
+@app.get("/salary-by-seniority")
+def salary_by_seniority(job_title: str = "Data Scientist"):
+
+    buckets = {
+        "Junior (0 ans)": (0, 1),
+        "Mid-level (2 ans)": (2, 3),
+        "Senior (5 ans)": (5, 20),
+    }
+
+    filtered = dataset[dataset["job_title"] == job_title]
+
+    if len(filtered) < 10:
+        filtered = dataset
+
+    result = []
+
+    for label, (low, high) in buckets.items():
+
+        subset = filtered[
+            (filtered["min_experience_years"] >= low) &
+            (filtered["min_experience_years"] < high)
+        ]
+
+        if len(subset) >= 5:
+            result.append({
+                "seniority": label,
+                "salary": int(subset["salary"].median()),
+                "count": len(subset)
+            })
+
+    return {"data": result, "job_title": job_title}
 
 # =========================
 # MARKET INSIGHTS

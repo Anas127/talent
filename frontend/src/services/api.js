@@ -14,3 +14,8 @@ export const analyzeCV = (file) => {
 export const simulate = (data) => {
   return API.post("/simulate", data);
 };
+
+export const getSalaryBySeniority = (jobTitle) =>
+  API.get("/salary-by-seniority", {
+    params: { job_title: jobTitle },
+  });

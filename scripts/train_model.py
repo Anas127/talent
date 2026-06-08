@@ -60,11 +60,7 @@ df["min_experience_years"] = pd.to_numeric(
 df["min_experience_years"] = df["min_experience_years"].fillna(0)
 df["min_experience_years"] = df["min_experience_years"].clip(0, 20)
 
-# =========================
-# ADD REALISM (CONTROLLED)
-# =========================
 
-df["salary"] = df["salary"] + np.random.normal(0, 8000, len(df))
 
 # =========================
 # ENCODING

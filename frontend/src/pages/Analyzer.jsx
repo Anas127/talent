@@ -17,6 +17,8 @@ import { motion } from "framer-motion";
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -24,7 +26,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { analyzeCV, simulate } from "../services/api";
+import { analyzeCV, simulate, getSalaryBySeniority } from "../services/api";
 
 const money = (value) =>
   new Intl.NumberFormat("fr-FR", {
@@ -33,12 +35,32 @@ const money = (value) =>
     maximumFractionDigits: 0,
   }).format(Number(value || 0));
 
+const formatExperience = (yearsValue, monthsValue) => {
+  const totalMonths =
+    typeof monthsValue === "number"
+      ? Math.round(monthsValue)
+      : Math.round(Number(yearsValue || 0) * 12);
+
+  const years = Math.floor(totalMonths / 12);
+  const months = totalMonths % 12;
+  const parts = [];
+
+  if (years > 0) parts.push(`${years} ${years === 1 ? "an" : "ans"}`);
+  if (months > 0) parts.push(`${months} mois`);
+
+  return parts.length ? parts.join(" et ") : "0 mois";
+};
+
 const fallbackDetails = {
   full_name: "Inconnu",
   seniority_level: "Inconnu",
   city: "Inconnu",
   skills: [],
+  education: [],
   education_level: "Inconnu",
+  education_degree: "Inconnu",
+  education_institution: "Inconnu",
+  education_status: "Inconnu",
   certifications: [],
   languages: [],
   strengths: [],
@@ -120,6 +142,8 @@ export default function Analyzer() {
   const [result, setResult] = useState(null);
   const [trajectory, setTrajectory] = useState([]);
   const [error, setError] = useState("");
+  const [seniorityData, setSeniorityData] = useState([]);
+  const [selectedTitle, setSelectedTitle] = useState("Data Scientist");
 
   const details = useMemo(
     () => ({ ...fallbackDetails, ...(result?.profile_details || {}) }),
@@ -127,6 +151,15 @@ export default function Analyzer() {
   );
 
   const predictionData = result?.used_for_prediction || {};
+
+  const validTitles = [
+    "Data Scientist",
+    "Data Analyst",
+    "Machine Learning Engineer",
+    "MLOps Engineer",
+    "AI Researcher",
+    "Applied Scientist",
+  ];
 
   const handleUpload = async () => {
     if (!file) {
@@ -143,17 +176,20 @@ export default function Analyzer() {
       setResult(analysis.data);
       localStorage.setItem("analysis_result", JSON.stringify(analysis.data));
 
-      const simulation = await simulate(analysis.data.used_for_prediction);
-      setTrajectory(simulation.data.trajectory || []);
-      localStorage.setItem(
-        "trajectory",
-        JSON.stringify(simulation.data.trajectory || []),
-      );
+      try {
+        const seniority = await getSalaryBySeniority(
+          analysis.data.used_for_prediction.job_title,
+        );
+        setSeniorityData(seniority.data.data || []);
+        setSelectedTitle(analysis.data.used_for_prediction.job_title);
+      } catch (e) {
+        console.error("Seniority chart failed:", e);
+      }
     } catch (err) {
       console.error(err);
       setError(
         err?.response?.data?.detail ||
-          "Échec de l’analyse du CV. Veuillez utiliser un PDF lisible contenant du texte.",
+          "L'analyse du CV a échoué. Utilisez un PDF lisible contenant du texte.",
       );
     } finally {
       setLoading(false);
@@ -255,7 +291,10 @@ export default function Analyzer() {
               label="Expérience"
               value={
                 predictionData.min_experience_years !== undefined
-                  ? `${predictionData.min_experience_years} ans`
+                  ? formatExperience(
+                      predictionData.min_experience_years,
+                      predictionData.min_experience_months,
+                    )
                   : "Inconnu"
               }
             />
@@ -344,7 +383,23 @@ export default function Analyzer() {
                 value={details.seniority_level}
               />
               <InfoRow label="Localisation" value={details.city} />
-              <InfoRow label="Formation" value={details.education_level} />
+              {details.education?.length > 0 ? (
+                details.education.map((edu, i) => (
+                  <InfoRow
+                    key={i}
+                    label={i === 0 ? "Formation" : ""}
+                    value={`${edu.degree} - ${edu.institution} (${edu.status})`}
+                  />
+                ))
+              ) : (
+                <>
+                  <InfoRow label="Formation" value={details.education_level} />
+                  <InfoRow
+                    label="Établissement"
+                    value={details.education_institution}
+                  />
+                </>
+              )}
               <InfoRow
                 label="Percentile"
                 value={result?.percentile || "En attente"}
@@ -362,7 +417,7 @@ export default function Analyzer() {
               <PillList items={details.strengths} />
             </Section>
 
-            <Section icon={Languages} title="Langues & Certifications">
+            <Section icon={Languages} title="Langues et certifications">
               <PillList
                 items={[...details.languages, ...details.certifications]}
               />
@@ -376,58 +431,45 @@ export default function Analyzer() {
             />
           </Section>
 
-          {trajectory.length > 0 && (
-            <Section icon={BarChart3} title="Évolution estimée du salaire">
+          {seniorityData.length > 0 && (
+            <Section
+              icon={BarChart3}
+              title={`Salaire médian par niveau — ${selectedTitle}`}
+            >
               <p className="mb-5 text-sm leading-6 text-[#5f6f7f]">
-                Cette courbe conserve le contexte du profil extrait et estime
-                l’évolution du salaire à mesure que l’expérience augmente.
+                Salaires médians issus du dataset réel, filtrés par poste et
+                niveau d'expérience.
               </p>
               <div className="h-[320px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={trajectory}>
-                    <defs>
-                      <linearGradient
-                        id="salaryGradient"
-                        x1="0"
-                        y1="0"
-                        x2="0"
-                        y2="1"
-                      >
-                        <stop
-                          offset="0%"
-                          stopColor="#0f766e"
-                          stopOpacity={0.24}
-                        />
-                        <stop
-                          offset="100%"
-                          stopColor="#0f766e"
-                          stopOpacity={0}
-                        />
-                      </linearGradient>
-                    </defs>
+                  <BarChart data={seniorityData}>
                     <CartesianGrid stroke="#e6ebf0" strokeDasharray="3 3" />
                     <XAxis
-                      dataKey="experience"
+                      dataKey="seniority"
                       axisLine={false}
                       tickLine={false}
                       stroke="#657487"
-                      tickFormatter={(value) => `${value}y`}
                     />
                     <YAxis
                       axisLine={false}
                       tickLine={false}
                       stroke="#657487"
-                      tickFormatter={(value) => `$${Math.round(value / 1000)}k`}
+                      tickFormatter={(v) => `$${Math.round(v / 1000)}k`}
                     />
-                    <Tooltip content={<TrajectoryTooltip />} />
-                    <Area
-                      type="monotone"
+                    <Tooltip
+                      formatter={(value) => [money(value), "Salaire médian"]}
+                      contentStyle={{
+                        borderRadius: "8px",
+                        border: "1px solid #dfe5ec",
+                        fontSize: "13px",
+                      }}
+                    />
+                    <Bar
                       dataKey="salary"
-                      stroke="#0f766e"
-                      strokeWidth={3}
-                      fill="url(#salaryGradient)"
+                      fill="#0f766e"
+                      radius={[6, 6, 0, 0]}
                     />
-                  </AreaChart>
+                  </BarChart>
                 </ResponsiveContainer>
               </div>
             </Section>
