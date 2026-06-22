@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException
 import joblib
 import pandas as pd
 import os
@@ -46,6 +46,22 @@ columns = joblib.load(
 dataset = pd.read_csv(
     os.path.join(base_dir, "data", "cleaned_jobs.csv")
 )
+
+# =========================
+# SALARY PERCENTILE THRESHOLDS
+# (computed live from the dataset, not hardcoded,
+# so they stay correct if the model is retrained)
+# =========================
+
+_salary_quantiles = dataset["salary"].quantile(
+    [0.25, 0.50, 0.75, 0.90, 0.95]
+)
+
+Q25 = float(_salary_quantiles[0.25])
+Q50 = float(_salary_quantiles[0.50])
+Q75 = float(_salary_quantiles[0.75])
+Q90 = float(_salary_quantiles[0.90])
+Q95 = float(_salary_quantiles[0.95])
 
 # =========================
 # PDF EXTRACTION
@@ -516,41 +532,41 @@ def format_contributions(
 
 
 def profile_score(predicted_salary):
-    if predicted_salary < 70673:
+    if predicted_salary < Q25:
         return 30
-    elif predicted_salary < 107565:
+    elif predicted_salary < Q50:
         return 55
-    elif predicted_salary < 154331:
+    elif predicted_salary < Q75:
         return 72
-    elif predicted_salary < 160015:
+    elif predicted_salary < Q90:
         return 85
-    elif predicted_salary < 162202:
+    elif predicted_salary < Q95:
         return 92
     else:
         return 97
 
 
 def profile_percentile(predicted_salary):
-    if predicted_salary < 70673:
+    if predicted_salary < Q25:
         return "Top 75%"
-    elif predicted_salary < 107565:
+    elif predicted_salary < Q50:
         return "Top 50%"
-    elif predicted_salary < 154331:
+    elif predicted_salary < Q75:
         return "Top 25%"
-    elif predicted_salary < 160015:
+    elif predicted_salary < Q90:
         return "Top 10%"
-    elif predicted_salary < 162202:
+    elif predicted_salary < Q95:
         return "Top 5%"
     else:
         return "Top 1%"
 
 
 def market_position(salary):
-    if salary < 70673:
+    if salary < Q25:
         return "Sous le marché"
-    elif salary < 107565:
+    elif salary < Q50:
         return "Moyenne du marché"
-    elif salary < 154331:
+    elif salary < Q75:
         return "Au-dessus du marché"
     else:
         return "Élite du marché"
@@ -691,74 +707,6 @@ async def analyze_cv(
         contributions
     }
 
-# =========================
-# SIMULATOR
-# =========================
-
-
-@app.post("/simulate")
-def simulate(data: dict):
-
-    current_exp = data.get(
-        "min_experience_years",
-        0
-    )
-
-    if not isinstance(current_exp, (int, float)):
-        current_exp = 0
-
-    current_exp = round(max(0, min(float(current_exp), 20)), 2)
-
-    chart_start_exp = int(round(current_exp))
-
-    trajectory = []
-
-    for step in range(10):
-
-        exp = chart_start_exp + step
-
-        sim_data = data.copy()
-
-        sim_data[
-            "min_experience_years"
-        ] = exp
-
-        df = pd.DataFrame([sim_data])
-
-        df = pd.get_dummies(df)
-
-        df = df.reindex(
-            columns=columns,
-            fill_value=0
-        )
-
-        base_salary = model.predict(df)[0]
-
-        years_growth = exp - current_exp
-
-        growth_multiplier = (
-            1 + (years_growth * 0.045)
-        )
-
-        salary = (
-            base_salary * growth_multiplier
-        )
-
-        trajectory.append({
-
-            "experience":
-            exp,
-
-            "salary":
-            round(float(salary), 2)
-
-        })
-
-    return {
-        "trajectory":
-        trajectory
-    }
-
 
 @app.get("/salary-by-seniority")
 def salary_by_seniority(job_title: str = "Data Scientist"):
@@ -791,183 +739,3 @@ def salary_by_seniority(job_title: str = "Data Scientist"):
             })
 
     return {"data": result, "job_title": job_title}
-
-# =========================
-# MARKET INSIGHTS
-# =========================
-
-
-@app.get("/market-insights")
-def market_insights():
-
-    # =========================
-    # NORMALIZATION
-    # =========================
-
-    insights_df = dataset.copy()
-
-    insights_df["remote_type"] = (
-        insights_df["remote_type"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-    )
-
-    # =========================
-    # GLOBAL METRICS
-    # =========================
-
-    average_salary = int(
-        insights_df["salary"].median()
-    )
-
-    # =========================
-    # FILTER SMALL SAMPLES
-    # =========================
-
-    filtered_roles = (
-        insights_df
-        .groupby("job_title")
-        .filter(lambda x: len(x) >= 10)
-    )
-
-    filtered_countries = (
-        insights_df
-        .groupby("country")
-        .filter(lambda x: len(x) >= 10)
-    )
-
-    # =========================
-    # TOP PAYING ROLES
-    # =========================
-
-    top_roles_df = (
-
-        filtered_roles
-
-        .groupby("job_title")["salary"]
-
-        .median()
-
-        .sort_values(
-            ascending=False
-        )
-
-        .head(5)
-
-        .round()
-
-        .astype(int)
-
-        .reset_index()
-
-    )
-
-    top_roles = top_roles_df.to_dict(
-        orient="records"
-    )
-
-    # =========================
-    # TOP PAYING COUNTRIES
-    # =========================
-
-    top_countries_df = (
-
-        filtered_countries
-
-        .groupby("country")["salary"]
-
-        .median()
-
-        .sort_values(
-            ascending=False
-        )
-
-        .head(5)
-
-        .round()
-
-        .astype(int)
-
-        .reset_index()
-
-    )
-
-    top_countries = (
-        top_countries_df.to_dict(
-            orient="records"
-        )
-    )
-
-    # =========================
-    # REMOTE PREMIUM
-    # =========================
-
-    remote_avg = insights_df[
-        insights_df["remote_type"]
-        == "remote"
-    ]["salary"].median()
-
-    onsite_avg = insights_df[
-        insights_df["remote_type"]
-        == "onsite"
-    ]["salary"].median()
-
-    # avoid division by zero
-
-    if onsite_avg and onsite_avg > 0:
-
-        remote_premium = int(
-
-            (
-                (remote_avg - onsite_avg)
-                / onsite_avg
-            ) * 100
-
-        )
-
-    else:
-
-        remote_premium = 0
-
-    # =========================
-    # HIGHEST PAYING ROLE
-    # =========================
-
-    highest_paying_role = (
-
-        filtered_roles
-
-        .groupby("job_title")["salary"]
-
-        .median()
-
-        .sort_values(
-            ascending=False
-        )
-
-        .index[0]
-
-    )
-
-    # =========================
-    # RESPONSE
-    # =========================
-
-    return {
-
-        "average_salary":
-        average_salary,
-
-        "remote_premium":
-        remote_premium,
-
-        "highest_paying_role":
-        highest_paying_role,
-
-        "top_roles":
-        top_roles,
-
-        "top_countries":
-        top_countries
-    }

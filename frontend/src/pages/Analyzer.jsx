@@ -15,8 +15,6 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -26,7 +24,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { analyzeCV, simulate, getSalaryBySeniority } from "../services/api";
+import { analyzeCV, getSalaryBySeniority } from "../services/api";
 
 const money = (value) =>
   new Intl.NumberFormat("fr-FR", {
@@ -121,26 +119,10 @@ function Section({ icon: Icon, title, children }) {
   );
 }
 
-function TrajectoryTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-
-  return (
-    <div className="rounded-lg border border-[#dfe5ec] bg-white px-4 py-3 shadow-lg">
-      <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#657487]">
-        {label} ans
-      </p>
-      <p className="mt-1 text-lg font-semibold text-[#102a43]">
-        {money(payload[0].value)}
-      </p>
-    </div>
-  );
-}
-
 export default function Analyzer() {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
-  const [trajectory, setTrajectory] = useState([]);
   const [error, setError] = useState("");
   const [seniorityData, setSeniorityData] = useState([]);
   const [selectedTitle, setSelectedTitle] = useState("Data Scientist");
@@ -152,15 +134,6 @@ export default function Analyzer() {
 
   const predictionData = result?.used_for_prediction || {};
 
-  const validTitles = [
-    "Data Scientist",
-    "Data Analyst",
-    "Machine Learning Engineer",
-    "MLOps Engineer",
-    "AI Researcher",
-    "Applied Scientist",
-  ];
-
   const handleUpload = async () => {
     if (!file) {
       setError("Veuillez d’abord importer un CV au format PDF.");
@@ -170,7 +143,6 @@ export default function Analyzer() {
     try {
       setError("");
       setLoading(true);
-      setTrajectory([]);
 
       const analysis = await analyzeCV(file);
       setResult(analysis.data);
